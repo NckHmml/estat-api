@@ -1,0 +1,55 @@
+name: Deploy to production
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-go:
+    name: Build Go Lambda
+    runs-on: ubuntu-latest
+    env:
+      GOOS: linux
+      GOARCH: arm64
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: "Build"
+        run: |
+          cd lambda
+          go install
+          go build -tags lambda.norpc -o bootstrap main.go
+          zip lambda.zip bootstrap
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda.zip
+          path: ./lambda/lambda.zip
+
+  deploy-terraform:
+    name: Terraform deployment
+    runs-on: ubuntu-latest
+    needs: build-go
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+      - name: "Download Artifact"
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda.zip
+          path: ./lambda
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: latest
+      - name: "Deploy"
+        run: |
+          cd infrastructure
+          terraform init
+          terraform apply -auto-approve -var-file=production.tfvars -var="rds_password=${{ secrets.RDS_PASSWORD }}"

@@ -2,6 +2,18 @@ provider "aws" {
   region = "eu-central-1"
 }
 
+data "aws_subnets" "subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [var.root_vpc]
+  }
+}
+
+data "aws_subnet" "default" {
+  for_each = toset(data.aws_subnets.subnets.ids)
+  id       = each.value
+}
+
 # GoLang Lambda
 
 resource "aws_iam_role" "lambda_role" {
@@ -36,8 +48,8 @@ resource "aws_lambda_function" "go_lambda" {
   source_code_hash = filebase64sha256("../lambda/lambda.zip")
 
   vpc_config {
-    subnet_ids         = ["subnet-0d4b5432b3eb3b0d6", "subnet-0ff2b125a02d89e5d", "subnet-0da3627c70638a215"]
-    security_group_ids = ["sg-0c803703df1cc80fa"]
+    subnet_ids         = [for s in data.aws_subnet.default : s.id]
+    security_group_ids = [var.root_sg]
   }
 
   environment {
@@ -53,7 +65,7 @@ resource "aws_lambda_function" "go_lambda" {
 # API Gateway
 
 resource "aws_api_gateway_rest_api" "api" {
-  name        = "GoLambdaAPI"
+  name        = "goLambdaAPI"
   description = "API Gateway for the Go Lambda"
 }
 
@@ -111,6 +123,6 @@ resource "aws_db_instance" "postgres" {
   password               = var.rds_password
   publicly_accessible    = false
   skip_final_snapshot    = true
-  vpc_security_group_ids = ["sg-0c803703df1cc80fa"]
+  vpc_security_group_ids = [var.root_sg]
 }
 
