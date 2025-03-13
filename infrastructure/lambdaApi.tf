@@ -17,7 +17,7 @@ data "aws_subnet" "default" {
 # GoLang Lambda
 
 resource "aws_iam_role" "lambda_role" {
-  name = "lamba_execution_role"
+  name = "lambdaExecutionRole"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -54,8 +54,9 @@ resource "aws_lambda_function" "go_lambda" {
 
   environment {
     variables = {
-      DB_HOST     = aws_db_instance.postgres.address
-      DB_NAME     = aws_db_instance.postgres.db_name
+      DB_HOST = aws_db_proxy.rds_proxy.endpoint
+      DB_NAME = aws_db_instance.postgres.db_name
+      # ToDo: change lambda code to also use secret
       DB_USER     = aws_db_instance.postgres.username
       DB_PASSWORD = aws_db_instance.postgres.password
     }
@@ -126,3 +127,92 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [var.root_sg]
 }
 
+# RDS Proxy
+
+resource "aws_secretsmanager_secret" "rds_proxy_secret" {
+  name = "rds-proxy"
+}
+
+resource "aws_secretsmanager_secret_version" "rds_secret_value" {
+  secret_id = aws_secretsmanager_secret.rds_proxy_secret.id
+  secret_string = jsonencode({
+    username = aws_db_instance.postgres.username
+    password = aws_db_instance.postgres.password
+  })
+}
+
+resource "aws_iam_role" "rds_proxy_role" {
+  name = "rdsProxyRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "sts:AssumeRole"
+        Principal = {
+          Service = "rds.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "rds_proxy_policy" {
+  name = "rdsProxyPolicy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetResourcePolicy",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:ListSecretVersionIds"
+        ]
+        Resource = [aws_secretsmanager_secret.rds_proxy_secret.arn]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetRandomPassword",
+          "secretsmanager:ListSecrets",
+          "rds-db:Connect"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "rds_proxy_attachment" {
+  role       = aws_iam_role.rds_proxy_role.name
+  policy_arn = aws_iam_policy.rds_proxy_policy.arn
+}
+
+resource "aws_db_proxy" "rds_proxy" {
+  name                   = "rds-lambda-proxy"
+  debug_logging          = false
+  engine_family          = "POSTGRESQL"
+  idle_client_timeout    = 1800
+  vpc_subnet_ids         = [for s in data.aws_subnet.default : s.id]
+  vpc_security_group_ids = [var.root_sg]
+  role_arn               = aws_iam_role.rds_proxy_role.arn
+
+  auth {
+    auth_scheme = "SECRETS"
+    iam_auth    = "DISABLED"
+    secret_arn  = aws_secretsmanager_secret.rds_proxy_secret.arn
+  }
+}
+
+resource "aws_db_proxy_default_target_group" "rds_proxy_target_group" {
+  db_proxy_name = aws_db_proxy.rds_proxy.name
+}
+
+resource "aws_db_proxy_target" "rds_proxy_target" {
+  db_instance_identifier = aws_db_instance.postgres.identifier
+  db_proxy_name          = aws_db_proxy.rds_proxy.name
+  target_group_name      = aws_db_proxy_default_target_group.rds_proxy_target_group.name
+}

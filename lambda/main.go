@@ -7,9 +7,9 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/lib/pq"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	_ "github.com/lib/pq"
 )
 
 type Response struct {
@@ -19,6 +19,7 @@ type Response struct {
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	dbHost := os.Getenv("DB_HOST")
 	dbUser := os.Getenv("DB_USER")
+	// ToDo: use secret values instead of env vars
 	dbPass := os.Getenv("DB_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
 
@@ -31,19 +32,27 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	}
 	defer db.Close()
 
-	var result string
-	err = db.QueryRow("SELECT 'Hello from PostgreSQL!'").Scan(&result)
-	if err != nil {
-		log.Fatalf("Query error: %v", err)
+	switch request.Path {
+	case "/hello":
+		var result string
+		err = db.QueryRow("SELECT 'Hello from PostgreSQL!'").Scan(&result)
+		if err != nil {
+			log.Fatalf("Query error: %v", err)
+		}
+
+		resp := Response{Message: result}
+		jsonResp, _ := json.Marshal(resp)
+
+		return events.APIGatewayProxyResponse{
+			StatusCode: 200,
+			Body:       string(jsonResp),
+		}, nil
+	default:
+		return events.APIGatewayProxyResponse{
+			StatusCode: 404,
+			Body:       `{"message": "Not Found"}`,
+		}, nil
 	}
-
-	resp := Response{Message: result}
-	jsonResp, _ := json.Marshal(resp)
-
-	return events.APIGatewayProxyResponse{
-		StatusCode: 200,
-		Body:       string(jsonResp),
-	}, nil
 }
 
 func main() {
