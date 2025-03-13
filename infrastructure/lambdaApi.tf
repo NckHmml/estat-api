@@ -77,10 +77,11 @@ resource "aws_api_gateway_resource" "proxy" {
 }
 
 resource "aws_api_gateway_method" "proxy" {
-  rest_api_id   = aws_api_gateway_rest_api.api.id
-  resource_id   = aws_api_gateway_resource.proxy.id
-  http_method   = "ANY"
-  authorization = "NONE"
+  rest_api_id      = aws_api_gateway_rest_api.api.id
+  resource_id      = aws_api_gateway_resource.proxy.id
+  http_method      = "ANY"
+  authorization    = "NONE"
+  api_key_required = true
 }
 
 resource "aws_api_gateway_integration" "lambda" {
@@ -93,14 +94,47 @@ resource "aws_api_gateway_integration" "lambda" {
 }
 
 resource "aws_api_gateway_deployment" "deployment" {
-  depends_on  = [aws_api_gateway_integration.lambda]
   rest_api_id = aws_api_gateway_rest_api.api.id
+
+  triggers = {
+    lambda = aws_lambda_function.go_lambda.source_code_hash
+  }
 }
 
 resource "aws_api_gateway_stage" "stage" {
   rest_api_id   = aws_api_gateway_rest_api.api.id
   deployment_id = aws_api_gateway_deployment.deployment.id
   stage_name    = "prod"
+}
+
+resource "aws_api_gateway_api_key" "api_key" {
+  name  = "defaultApiKey"
+  value = "37fb385a-115a-4140-888d-0d47e552da04"
+}
+
+resource "aws_api_gateway_usage_plan" "ratelimit" {
+  name = "defaultUsagePlan"
+
+  api_stages {
+    api_id = aws_api_gateway_rest_api.api.id
+    stage  = aws_api_gateway_stage.stage.stage_name
+  }
+
+  quota_settings {
+    limit  = 10000
+    period = "DAY"
+  }
+
+  throttle_settings {
+    rate_limit  = 1
+    burst_limit = 1
+  }
+}
+
+resource "aws_api_gateway_usage_plan_key" "plan_key" {
+  key_id        = aws_api_gateway_api_key.api_key.id
+  key_type      = "API_KEY"
+  usage_plan_id = aws_api_gateway_usage_plan.ratelimit.id
 }
 
 resource "aws_lambda_permission" "api_gateway" {
