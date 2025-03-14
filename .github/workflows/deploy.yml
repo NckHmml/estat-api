@@ -7,6 +7,9 @@ jobs:
   build-go:
     name: Build Go Lambda
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./lambda
     env:
       GOOS: linux
       GOARCH: arm64
@@ -17,9 +20,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
+      - name: Go cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-
       - name: "Build"
         run: |
-          cd lambda
           go install
           go build -tags lambda.norpc -o bootstrap main.go
           zip lambda.zip bootstrap
@@ -32,6 +42,9 @@ jobs:
   deploy-terraform:
     name: Terraform deployment
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./infrastructure
     needs: build-go
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -50,6 +63,5 @@ jobs:
           terraform_version: latest
       - name: "Deploy"
         run: |
-          cd infrastructure
           terraform init
           terraform apply -auto-approve -var-file=production.tfvars -var="rds_password=${{ secrets.RDS_PASSWORD }}"

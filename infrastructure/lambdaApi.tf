@@ -2,6 +2,8 @@ provider "aws" {
   region = "eu-central-1"
 }
 
+# Network
+
 data "aws_subnets" "subnets" {
   filter {
     name   = "vpc-id"
@@ -12,6 +14,15 @@ data "aws_subnets" "subnets" {
 data "aws_subnet" "default" {
   for_each = toset(data.aws_subnets.subnets.ids)
   id       = each.value
+}
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id              = var.root_vpc
+  service_name        = "com.amazonaws.eu-central-1.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [for s in data.aws_subnet.default : s.id]
+  security_group_ids  = [var.root_sg]
+  private_dns_enabled = true
 }
 
 # GoLang Lambda
@@ -32,10 +43,31 @@ resource "aws_iam_role" "lambda_role" {
   })
 }
 
-resource "aws_iam_policy_attachment" "lambda_policy" {
-  name       = "lambda_basic_policy_attachment"
-  roles      = [aws_iam_role.lambda_role.name]
+resource "aws_iam_policy" "lambda_secret_policy" {
+  name = "lambdaSecretPolicy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [aws_secretsmanager_secret.rds_proxy_secret.arn]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic_policy" {
+  role       = aws_iam_role.lambda_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_secret_policy" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_secret_policy.arn
 }
 
 resource "aws_lambda_function" "go_lambda" {
@@ -54,11 +86,9 @@ resource "aws_lambda_function" "go_lambda" {
 
   environment {
     variables = {
-      DB_HOST = aws_db_proxy.rds_proxy.endpoint
-      DB_NAME = aws_db_instance.postgres.db_name
-      # ToDo: change lambda code to also use secret
-      DB_USER     = aws_db_instance.postgres.username
-      DB_PASSWORD = aws_db_instance.postgres.password
+      DB_HOST       = aws_db_proxy.rds_proxy.endpoint
+      DB_NAME       = aws_db_instance.postgres.db_name
+      DB_SECRET_ARN = aws_secretsmanager_secret.rds_proxy_secret.arn
     }
   }
 }
@@ -94,10 +124,15 @@ resource "aws_api_gateway_integration" "lambda" {
 }
 
 resource "aws_api_gateway_deployment" "deployment" {
+  depends_on  = [aws_lambda_function.go_lambda]
   rest_api_id = aws_api_gateway_rest_api.api.id
 
   triggers = {
     lambda = aws_lambda_function.go_lambda.source_code_hash
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
