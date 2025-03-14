@@ -8,6 +8,9 @@ import (
 	"log"
 	"os"
 
+	C "golambda/controllers"
+	T "golambda/types"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,15 +18,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	_ "github.com/lib/pq"
 )
-
-type Response struct {
-	Message string `json:"message"`
-}
-
-type DBSecret struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
 
 // Global database connection
 var db *sql.DB
@@ -50,7 +44,7 @@ func init() {
 		log.Fatalf("Error getting secret: %v", err)
 	}
 
-	var secret DBSecret
+	var secret T.DBSecret
 	err = json.Unmarshal([]byte(*result.SecretString), &secret)
 	if err != nil {
 		log.Fatalf("Error parsing secret: %v", err)
@@ -72,25 +66,15 @@ func init() {
 }
 
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	switch request.Path {
-	case "/hello":
-		var result string
-		err := db.QueryRow("SELECT 'Hello from PostgreSQL!'").Scan(&result)
-		if err != nil {
-			log.Printf("Query error: %v", err)
-			return events.APIGatewayProxyResponse{
-				StatusCode: 500,
-				Body:       `{"message": "Internal Server Error"}`,
-			}, nil
-		}
+	switch fmt.Sprintf("%s:%s", request.HTTPMethod, request.Path) {
+	case "GET:/hello":
+		response, err := C.Hello(db, request)
+		return response, err
 
-		resp := Response{Message: result}
-		jsonResp, _ := json.Marshal(resp)
+	case "GET:/labour-participation":
+		response, err := C.LabourParticipation(db, request)
+		return response, err
 
-		return events.APIGatewayProxyResponse{
-			StatusCode: 200,
-			Body:       string(jsonResp),
-		}, nil
 	default:
 		return events.APIGatewayProxyResponse{
 			StatusCode: 404,
